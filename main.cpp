@@ -4,6 +4,7 @@
 #include <map>
 #include <vector>
 #include <algorithm>
+#include <stdexcept>
 
 using namespace std;
 
@@ -19,28 +20,31 @@ map<string, double> Gtext_table;
 // Зчитування таблиці U(x) або T(x)
 bool readTable(const string& filename, vector<Pair>& table) {
     ifstream fin(filename);
-    if (!fin.is_open()) return false;
+    if (!fin.is_open()) throw runtime_error("Не вдалося відкрити файл: " + filename);
     double x, val;
     while (fin >> x >> val) {
         table.push_back({x, val});
     }
+    if (table.empty()) throw runtime_error("Файл порожній: " + filename);
     return true;
 }
 
 // Зчитування текстової таблиці
 bool readGtext(const string& filename) {
     ifstream fin(filename);
-    if (!fin.is_open()) return false;
+    if (!fin.is_open()) throw runtime_error("Не вдалося відкрити файл: " + filename);
     string text;
     double val;
     while (fin >> text >> val) {
         Gtext_table[text] = val;
     }
+    if (Gtext_table.empty()) throw runtime_error("Файл dat3.dat порожній або некоректний.");
     return true;
 }
 
 // Інтерполяція
 double interpolate(const vector<Pair>& table, double x) {
+    if (table.size() < 2) throw runtime_error("Недостатньо точок для інтерполяції.");
     for (size_t i = 0; i < table.size() - 1; ++i) {
         if (table[i].x <= x && x <= table[i + 1].x) {
             double x0 = table[i].x, y0 = table[i].value;
@@ -75,14 +79,20 @@ double Rnk_alg2(double x, double y) {
 
 // Qqn для алгоритму 1
 double Qqn(double x, double y, double z, bool& uFail, bool& tFail) {
-    if (U_table.empty()) uFail = true;
-    if (T_table.empty()) tFail = true;
-    if (uFail || tFail) return 0;
-    double u = interpolate(U_table, x);
-    double t = interpolate(T_table, y);
-    double uz = interpolate(U_table, z);
-    double tz = interpolate(T_table, z);
-    return x / u + y * t - uz * tz;
+    try {
+        if (U_table.empty()) uFail = true;
+        if (T_table.empty()) tFail = true;
+        if (uFail || tFail) return 0;
+        double u = interpolate(U_table, x);
+        double t = interpolate(T_table, y);
+        double uz = interpolate(U_table, z);
+        double tz = interpolate(T_table, z);
+        return x / u + y * t - uz * tz;
+    } catch (const exception& e) {
+        uFail = tFail = true;
+        cerr << "[Qqn] Помилка: " << e.what() << endl;
+        return 0;
+    }
 }
 
 double Qnk(double x, double y, bool& uFail, bool& tFail) {
@@ -90,7 +100,8 @@ double Qnk(double x, double y, bool& uFail, bool& tFail) {
 }
 
 double Rnk(double x, double y, bool& uFail, bool& tFail) {
-    if (uFail || tFail || x <= 5 || T_table.empty() || U_table.empty()) return Rnk_alg2(x, y);
+    if (uFail || tFail || x <= 5 || T_table.empty() || U_table.empty())
+        return Rnk_alg2(x, y);
     return x * Qnk(x, y, uFail, tFail) + y * Qnk(y, x, uFail, tFail);
 }
 
@@ -149,47 +160,58 @@ double RText(double x, double y, double z, const string& text) {
     double f = CText(Max4(x, y, x + z, y + z), text);
     bool valid = true;
 
-    // r використовується для побудови 2k, але зберігаємо k окремо:
     bool tempUFail = false, tempTFail = false;
     double r_val = Rnk(x, y, tempUFail, tempTFail);
     double k_val = r_val;
 
     double trr1 = Trr(f, r_val, valid);
-    double trr2 = Trr(f, 2 * k_val, valid); // тут ВИПРАВЛЕНО: 2 * k
+    double trr2 = Trr(f, 2 * k_val, valid);
 
-    if (!valid) return 0;
+    if (!valid) throw runtime_error("Помилка в обчисленнях Trr або Yrr.");
     return f * trr1 + r_val * trr2;
 }
 
 // Основна функція Variant
 double Variant(double x, double y, double z, const string& text) {
-    bool uFail = !readTable("dat1.dat", U_table);
-    bool tFail = !readTable("dat2.dat", T_table);
+    try {
+        readTable("dat1.dat", U_table);
+        readTable("dat2.dat", T_table);
+        readGtext("dat3.dat");
 
-    if (!readGtext("dat3.dat")) {
-        cerr << "Помилка: неможливо відкрити файл dat3.dat" << endl;
-        exit(1);
+        bool uFail = false, tFail = false;
+
+        double r = (!uFail && !tFail)
+            ? Rnk(x, y, uFail, tFail) + Rnk(y, z, uFail, tFail) * Rnk(x, y, uFail, tFail)
+            : func_alg3(x, y, z);
+
+        double k = RText(x, y, z, text);
+
+        return 0.8973 * r + 0.1027 * k;
+
+    } catch (const exception& e) {
+        cerr << "[Variant] Помилка: " << e.what() << endl;
+        throw; // далі обробляється в main
     }
-
-    double r = (!uFail && !tFail)
-        ? Rnk(x, y, uFail, tFail) + Rnk(y, z, uFail, tFail) * Rnk(x, y, uFail, tFail)
-        : func_alg3(x, y, z);
-
-    double k = RText(x, y, z, text);
-
-    return 0.8973 * r + 0.1027 * k;
 }
 
-// main
+// main з глобальним try/catch
 int main() {
-    double x, y, z;
-    string text;
-    cout << "Введіть x, y, z: ";
-    cin >> x >> y >> z;
-    cout << "Введіть текст: ";
-    cin >> text;
+    try {
+        double x, y, z;
+        string text;
 
-    double result = Variant(x, y, z, text);
-    cout << "Результат Variant(x, y, z, text) = " << result << endl;
+        cout << "Введіть x, y, z: ";
+        if (!(cin >> x >> y >> z)) throw runtime_error("Некоректне введення чисел!");
+
+        cout << "Введіть текст: ";
+        if (!(cin >> text)) throw runtime_error("Некоректне введення тексту!");
+
+        double result = Variant(x, y, z, text);
+        cout << "Результат Variant(x, y, z, text) = " << result << endl;
+
+    } catch (const exception& e) {
+        cerr << "[ПОМИЛКА] " << e.what() << endl;
+    }
+
     return 0;
 }
